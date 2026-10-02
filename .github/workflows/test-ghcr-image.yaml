@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: test-ghcr-image-${{ github.ref }}
+  group: test-ghcr-image-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -49,7 +49,7 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64
           build-args: |
-            BUILDER_BASE=quay.io/cilium/cilium-envoy-builder-dev:b70e7720553bee71e2323955a88f64271a8dfc7a
+            BUILDER_BASE=quay.io/cilium/cilium-envoy-builder:b70e7720553bee71e2323955a88f64271a8dfc7a
             ARCHIVE_IMAGE=quay.io/cilium/cilium-envoy-builder:v1.37-archive-latest
             BAZEL_BUILD_OPTS=--jobs=2 --remote_upload_local_results=false
           push: true
