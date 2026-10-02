@@ -51,7 +51,7 @@ jobs:
           build-args: |
             BUILDER_BASE=quay.io/cilium/cilium-envoy-builder:b70e7720553bee71e2323955a88f64271a8dfc7a
             ARCHIVE_IMAGE=quay.io/cilium/cilium-envoy-builder:v1.37-archive-latest
-            BAZEL_BUILD_OPTS=--jobs=2 --remote_upload_local_results=false
+            BAZEL_BUILD_OPTS=--jobs=HOST_CPUS*.75 --remote_upload_local_results=false
           push: true
           tags: ghcr.io/veshant/cilium-envoy-test:1.20.2-${{ github.sha }}
           labels: org.opencontainers.image.source=https://github.com/veshant/cilium-proxy
