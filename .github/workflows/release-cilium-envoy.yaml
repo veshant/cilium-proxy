@@ -1,0 +1,92 @@
+name: Publish Cilium Envoy release
+
+on:
+  push:
+    tags:
+      - 'v1.37.6-cilium1.20.2-tigo.*'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: cilium-envoy-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RELEASE_IMAGE: ghcr.io/${{ github.repository_owner }}/cilium-envoy
+    steps:
+      - name: Check out release metadata
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release source and candidate
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_file="releases/${GITHUB_REF_NAME}.json"
+          test -f "$release_file"
+          source_sha="$(jq -er '.source_sha' "$release_file")"
+          candidate="$(jq -er '.candidate_image' "$release_file")"
+          test "$source_sha" = 0e528dcf3ab4ae966511f31ce795facb83034673
+          test "$candidate" = ghcr.io/veshant/cilium-envoy-test@sha256:482cf968b63820f0b64440252c7740a49fe161a2dc24d11551800ec3596b6505
+          git merge-base --is-ancestor "$source_sha" HEAD
+          git diff --quiet "$source_sha" HEAD -- cilium/l7policy.cc ENVOY_VERSION Dockerfile
+          test "$(cat ENVOY_VERSION)" = envoy-1.37.6
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote the tested image by digest
+        shell: bash
+        env:
+          CANDIDATE_IMAGE: ${{ steps.release.outputs.candidate }}
+        run: |
+          set -euo pipefail
+          release_ref="${RELEASE_IMAGE}:${GITHUB_REF_NAME}"
+          if docker buildx imagetools inspect "$release_ref" >/dev/null 2>&1; then
+            echo "Release tag already exists: $release_ref" >&2
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$release_ref" "$CANDIDATE_IMAGE"
+
+      - name: Verify published artifact
+        shell: bash
+        env:
+          CANDIDATE_IMAGE: ${{ steps.release.outputs.candidate }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          release_ref="${RELEASE_IMAGE}:${GITHUB_REF_NAME}"
+          candidate_amd64="$(docker buildx imagetools inspect --raw "$CANDIDATE_IMAGE" | jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')"
+          release_amd64="$(docker buildx imagetools inspect --raw "$release_ref" | jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')"
+          test "$candidate_amd64" = "$release_amd64"
+          version="$(docker run --rm --pull always "$release_ref" cilium-envoy --version)"
+          case "$version" in
+            *"${SOURCE_SHA}/1.37.6"*) ;;
+            *) echo "Unexpected binary version: $version" >&2; exit 1 ;;
+          esac
+          digest="$(docker buildx imagetools inspect "$release_ref" | awk '/^Digest:/ {print $2; exit}')"
+          test -n "$digest"
+          {
+            echo "Release: $release_ref"
+            echo "Deploy by digest: ${RELEASE_IMAGE}@${digest}"
+            echo "Tested source commit: $SOURCE_SHA"
+            echo "amd64 manifest: $release_amd64"
+          } >> "$GITHUB_STEP_SUMMARY"
